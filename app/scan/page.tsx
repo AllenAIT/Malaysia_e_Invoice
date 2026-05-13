@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import { QRScanner } from '@/components/QRScanner';
 import { OCRScanner } from '@/components/OCRScanner';
 import { ManualEntry } from '@/components/ManualEntry';
-import { parseMyInvoisQR } from '@/lib/parseMyInvois';
+import { parseMyInvoisQR, ParsedQR } from '@/lib/parseMyInvois';
 import { parseInvoiceText, ParsedOCR } from '@/lib/ocrParse';
 import { db, Invoice } from '@/lib/db';
 import { classifyByKeyword } from '@/lib/classifications';
@@ -12,12 +12,12 @@ import { useRouter } from 'next/navigation';
 
 type Tab = 'qr' | 'ocr' | 'manual';
 
-type QRResult = { type: 'qr'; data: ReturnType<typeof parseMyInvoisQR> & { rawPayload: string } };
-type OCRResult = { type: 'ocr'; data: ParsedOCR };
+type QRResult = { type: 'qr'; data: ParsedQR & { rawPayload: string } };
+type OCRResult = { type: 'ocr'; data: ParsedOCR; qr: ParsedQR | null };
 
 export default function ScanPage() {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>('qr');
+  const [tab, setTab] = useState<Tab>('ocr');
   const [result, setResult] = useState<QRResult | OCRResult | null>(null);
 
   const handleQR = (payload: string) => {
@@ -25,9 +25,9 @@ export default function ScanPage() {
     setResult({ type: 'qr', data: { ...parsed, rawPayload: payload } });
   };
 
-  const handleOCR = (text: string) => {
+  const handleOCR = (text: string, _imageDataUrl: string, qr: ParsedQR | null) => {
     const parsed = parseInvoiceText(text);
-    setResult({ type: 'ocr', data: parsed });
+    setResult({ type: 'ocr', data: parsed, qr });
   };
 
   const saveQR = async () => {
@@ -54,6 +54,7 @@ export default function ScanPage() {
   const saveOCR = async () => {
     if (!result || result.type !== 'ocr') return;
     const d = result.data;
+    const qr = result.qr;
     const items = d.items.length > 0
       ? d.items
       : [{
@@ -64,10 +65,12 @@ export default function ScanPage() {
           taxAmount: d.taxAmount || 0,
           totalIncludingTax: d.totalIncludingTax || 0,
         }];
+    const uuid = d.uuid || qr?.uuid || `OCR-${Date.now().toString(36).toUpperCase()}`;
     const inv: Invoice = {
-      uuid: d.uuid || `OCR-${Date.now().toString(36).toUpperCase()}`,
+      uuid,
+      validationUrl: qr?.validationUrl,
       documentCode: d.documentCode,
-      source: 'ocr',
+      source: qr ? 'qr+ocr' : 'ocr',
       supplierName: d.supplierName || '未識別商家',
       supplierTIN: d.supplierTIN,
       supplierMSIC: d.supplierMSIC,
@@ -81,6 +84,7 @@ export default function ScanPage() {
       paymentMode: d.paymentMode,
       items,
       rawOcrText: d.rawText,
+      rawQrPayload: qr ? qr.validationUrl : undefined,
     };
     const id = await db.invoices.add(inv);
     router.push(`/invoices/${id}`);
@@ -90,11 +94,13 @@ export default function ScanPage() {
     <div className="space-y-4 pt-2">
       <header>
         <h1 className="text-xl font-bold tracking-tight">掃描發票</h1>
-        <p className="mt-1 text-xs text-zinc-500">支援 MyInvois QR Code、紙本發票 OCR、手動輸入</p>
+        <p className="mt-1 text-xs text-zinc-500">
+          上傳發票圖片可同時抓 QR + 文字明細，或用相機直掃 QR
+        </p>
       </header>
 
       <div className="flex gap-1 rounded-xl bg-zinc-100 p-1">
-        {(['qr', 'ocr', 'manual'] as Tab[]).map(t => (
+        {(['ocr', 'qr', 'manual'] as Tab[]).map(t => (
           <button
             key={t}
             onClick={() => { setTab(t); setResult(null); }}
@@ -103,14 +109,14 @@ export default function ScanPage() {
               tab === t ? 'bg-white text-zinc-900 shadow' : 'text-zinc-600'
             )}
           >
-            {t === 'qr' ? '📱 QR 掃描' : t === 'ocr' ? '📷 OCR 拍照' : '✍️ 手動'}
+            {t === 'ocr' ? '📤 上傳發票圖' : t === 'qr' ? '📱 相機掃 QR' : '✍️ 手動'}
           </button>
         ))}
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
-        {tab === 'qr' && !result && <QRScanner onScan={handleQR} />}
         {tab === 'ocr' && !result && <OCRScanner onResult={handleOCR} />}
+        {tab === 'qr' && !result && <QRScanner onScan={handleQR} />}
         {tab === 'manual' && <ManualEntry />}
 
         {result?.type === 'qr' && (
@@ -120,6 +126,9 @@ export default function ScanPage() {
               {result.data.isMyInvois
                 ? <div className="mt-1 text-xs">已識別為 MyInvois 官方驗證連結</div>
                 : <div className="mt-1 text-xs text-emerald-800/80">非標準連結 — 將以原始內容作為 UUID</div>}
+              <div className="mt-2 text-[11px] text-emerald-800/70">
+                提醒：QR 只含 UUID，不含金額與品項。要抓完整資訊請改用「📤 上傳發票圖」。
+              </div>
             </div>
             <Row label="Unique Identifier" value={result.data.uuid} mono />
             <Row label="Validation URL" value={result.data.validationUrl} mono small />
@@ -135,16 +144,39 @@ export default function ScanPage() {
         {result?.type === 'ocr' && (
           <div className="space-y-3">
             <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-              ✅ OCR 完成，已抽取以下欄位（之後可在詳情頁編輯）
+              ✅ 抽取完成
+              {result.qr && (
+                <div className="mt-1 text-xs">
+                  同時偵測到 QR：<span className="font-mono">{result.qr.uuid.slice(0, 24)}{result.qr.uuid.length > 24 ? '…' : ''}</span>
+                </div>
+              )}
+              {!result.qr && (
+                <div className="mt-1 text-xs text-emerald-800/80">
+                  圖中未偵測到 QR — 會以 OCR 抽到的 UUID 或自產的 OCR-xxxx 代碼
+                </div>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <Row label="Supplier" value={result.data.supplierName} />
-              <Row label="UUID" value={result.data.uuid} mono />
+              <Row label="UUID" value={result.data.uuid || result.qr?.uuid} mono />
               <Row label="Total" value={result.data.totalIncludingTax ? `RM ${result.data.totalIncludingTax}` : undefined} />
               <Row label="Tax" value={result.data.taxAmount ? `RM ${result.data.taxAmount}` : undefined} />
               <Row label="Date" value={result.data.issueDate} />
               <Row label="Payment" value={result.data.paymentMode} />
+              <Row label="Supplier TIN" value={result.data.supplierTIN} mono />
+              <Row label="MSIC" value={result.data.supplierMSIC} mono />
             </div>
+            {result.data.items.length > 0 && (
+              <div className="rounded-lg border border-zinc-200 p-2">
+                <div className="mb-1 text-[10px] uppercase text-zinc-500">明細 ({result.data.items.length})</div>
+                {result.data.items.map((it, i) => (
+                  <div key={i} className="flex justify-between text-xs">
+                    <span>{it.description} ×{it.quantity}</span>
+                    <span className="font-mono">RM {it.totalIncludingTax.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             <details className="rounded-lg bg-zinc-50 p-2">
               <summary className="cursor-pointer text-xs text-zinc-500">原始 OCR 文字</summary>
               <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-[10px] text-zinc-600">{result.data.rawText}</pre>

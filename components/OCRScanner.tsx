@@ -1,9 +1,12 @@
 'use client';
 import { useState } from 'react';
+import { parseMyInvoisQR, ParsedQR } from '@/lib/parseMyInvois';
 
 interface Props {
-  onResult: (text: string, imageDataUrl: string) => void;
+  onResult: (text: string, imageDataUrl: string, qr: ParsedQR | null) => void;
 }
+
+const HIDDEN_QR_ID = 'hidden-qr-from-ocr';
 
 export function OCRScanner({ onResult }: Props) {
   const [progress, setProgress] = useState(0);
@@ -18,7 +21,7 @@ export function OCRScanner({ onResult }: Props) {
     setError(null);
     setBusy(true);
     setProgress(0);
-    setStatus('載入 OCR 引擎…');
+    setStatus('載入引擎…');
 
     const dataUrl: string = await new Promise(resolve => {
       const r = new FileReader();
@@ -26,6 +29,18 @@ export function OCRScanner({ onResult }: Props) {
       r.readAsDataURL(file);
     });
     setPreview(dataUrl);
+
+    let qr: ParsedQR | null = null;
+    try {
+      setStatus('偵測 QR Code…');
+      const qrMod = await import('html5-qrcode');
+      const qrScanner = new qrMod.Html5Qrcode(HIDDEN_QR_ID);
+      const qrText = await qrScanner.scanFile(file, false);
+      await qrScanner.clear();
+      qr = parseMyInvoisQR(qrText);
+    } catch {
+      // No QR detected — proceed with OCR only
+    }
 
     try {
       const { createWorker } = await import('tesseract.js');
@@ -38,7 +53,7 @@ export function OCRScanner({ onResult }: Props) {
       const { data } = await worker.recognize(dataUrl);
       await worker.terminate();
       setStatus('完成');
-      onResult(data.text, dataUrl);
+      onResult(data.text, dataUrl, qr);
     } catch (err: any) {
       setError(err?.message || 'OCR 失敗');
     } finally {
@@ -50,9 +65,9 @@ export function OCRScanner({ onResult }: Props) {
     <div className="space-y-3">
       <label className="block">
         <div className="cursor-pointer rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center hover:border-brand-400 hover:bg-brand-50/40">
-          <div className="text-3xl">📷</div>
-          <div className="mt-2 text-sm font-medium">點擊上傳發票圖 / 拍照</div>
-          <div className="mt-1 text-xs text-zinc-500">支援 JPG、PNG。建議發票畫面清晰、文字水平。</div>
+          <div className="text-3xl">📤</div>
+          <div className="mt-2 text-sm font-medium">上傳發票圖 / 拍照（智慧抽取）</div>
+          <div className="mt-1 text-xs text-zinc-500">同時偵測 QR Code 與辨識文字明細</div>
           <div className="mt-1 text-[10px] text-zinc-400">首次使用會下載英文 OCR 字庫約 2MB</div>
         </div>
         <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} disabled={busy} />
@@ -77,6 +92,8 @@ export function OCRScanner({ onResult }: Props) {
       )}
 
       {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+      <div id={HIDDEN_QR_ID} style={{ width: 0, height: 0, overflow: 'hidden' }} />
     </div>
   );
 }
