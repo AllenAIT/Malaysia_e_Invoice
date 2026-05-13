@@ -1,5 +1,6 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import clsx from 'clsx';
 import { parseMyInvoisQR, ParsedQR } from '@/lib/parseMyInvois';
 
 interface Props {
@@ -14,10 +15,10 @@ export function OCRScanner({ onResult }: Props) {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [pastedHint, setPastedHint] = useState(false);
 
-  const handleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const processFile = async (file: File) => {
     setError(null);
     setBusy(true);
     setProgress(0);
@@ -39,7 +40,7 @@ export function OCRScanner({ onResult }: Props) {
       await qrScanner.clear();
       qr = parseMyInvoisQR(qrText);
     } catch {
-      // No QR detected — proceed with OCR only
+      // No QR in image — OCR will still run
     }
 
     try {
@@ -61,17 +62,80 @@ export function OCRScanner({ onResult }: Props) {
     }
   };
 
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('請拖曳圖片檔案');
+      return;
+    }
+    processFile(file);
+  };
+
+  // Listen for clipboard paste (Ctrl+V) anywhere on the page
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      if (busy) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (const item of Array.from(items)) {
+        if (item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (file) {
+            e.preventDefault();
+            setPastedHint(true);
+            processFile(file);
+            return;
+          }
+        }
+      }
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [busy]);
+
   return (
     <div className="space-y-3">
-      <label className="block">
-        <div className="cursor-pointer rounded-xl border-2 border-dashed border-zinc-300 bg-zinc-50 px-6 py-8 text-center hover:border-brand-400 hover:bg-brand-50/40">
-          <div className="text-3xl">📤</div>
-          <div className="mt-2 text-sm font-medium">上傳發票圖 / 拍照（智慧抽取）</div>
-          <div className="mt-1 text-xs text-zinc-500">同時偵測 QR Code 與辨識文字明細</div>
-          <div className="mt-1 text-[10px] text-zinc-400">首次使用會下載英文 OCR 字庫約 2MB</div>
+      <label
+        className="block"
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+      >
+        <div
+          className={clsx(
+            'cursor-pointer rounded-xl border-2 border-dashed px-6 py-8 text-center transition',
+            dragOver
+              ? 'border-brand-500 bg-brand-50 scale-[1.01]'
+              : 'border-zinc-300 bg-zinc-50 hover:border-brand-400 hover:bg-brand-50/40'
+          )}
+        >
+          <div className="text-3xl">{dragOver ? '⬇️' : busy ? '⏳' : '📤'}</div>
+          <div className="mt-2 text-sm font-medium">
+            {dragOver ? '放開上傳' : '點擊上傳、拖曳檔案，或 Ctrl+V 貼上截圖'}
+          </div>
+          <div className="mt-1 text-xs text-zinc-500">
+            同時偵測 QR Code + OCR 文字明細
+          </div>
+          <div className="mt-1 text-[10px] text-zinc-400">
+            首次使用會下載英文 OCR 字庫約 2MB
+          </div>
         </div>
         <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFile} disabled={busy} />
       </label>
+
+      {pastedHint && !busy && !error && (
+        <div className="rounded-lg bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+          ✓ 偵測到剪貼簿圖片，已開始處理
+        </div>
+      )}
 
       {preview && (
         <div className="overflow-hidden rounded-xl border border-zinc-200">
@@ -92,6 +156,10 @@ export function OCRScanner({ onResult }: Props) {
       )}
 
       {error && <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+
+      <div className="rounded-lg bg-sky-50 px-3 py-2 text-[11px] text-sky-800">
+        💡 從電腦掃發票？把發票畫面截圖（Win+Shift+S）後直接 <kbd className="rounded bg-white px-1 font-mono">Ctrl+V</kbd> 貼到這裡即可，不用存檔。
+      </div>
 
       <div id={HIDDEN_QR_ID} style={{ width: 0, height: 0, overflow: 'hidden' }} />
     </div>

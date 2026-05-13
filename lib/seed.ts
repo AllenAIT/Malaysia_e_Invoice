@@ -116,17 +116,28 @@ const EXTRA_SEEDS: Invoice[] = [
   },
 ];
 
-export async function seedIfEmpty(): Promise<boolean> {
-  const count = await db.invoices.count();
-  if (count > 0) return false;
-
-  await db.invoices.bulkAdd([ENVISAGE_INVOICE, ...EXTRA_SEEDS]);
-
+async function seedDemo(): Promise<void> {
+  await db.invoices.add(ENVISAGE_INVOICE);
   const draw: LotteryDraw = {
     period: '2024-09 / 10',
     drawnAt: new Date('2024-10-25T00:00:00.000Z').toISOString(),
     prizes: generateRiggedDraw(ENVISAGE_INVOICE.uuid, '特別獎'),
   };
   await db.draws.add(draw);
+}
+
+export async function seedIfEmpty(): Promise<boolean> {
+  const count = await db.invoices.count();
+  if (count > 0) return false;
+  await seedDemo();
   return true;
 }
+
+export async function resetToDemo(): Promise<void> {
+  await db.invoices.clear();
+  await db.draws.clear();
+  await seedDemo();
+}
+
+// Kept for reference / future "load more samples" feature
+export const SAMPLE_INVOICES: Invoice[] = EXTRA_SEEDS;

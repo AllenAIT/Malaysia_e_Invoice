@@ -5,6 +5,7 @@ import { db } from '@/lib/db';
 import { formatRM } from '@/lib/formatters';
 import { InvoiceCard } from '@/components/InvoiceCard';
 import { getClassification } from '@/lib/classifications';
+import { resetToDemo } from '@/lib/seed';
 
 export default function Home() {
   const invoices = useLiveQuery(() => db.invoices.orderBy('issueDate').reverse().toArray(), [], []);
@@ -94,6 +95,27 @@ export default function Home() {
               <Link href="/scan" className="font-medium text-brand-600">開始掃描 →</Link>
             </div>
           )}
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-zinc-200 bg-white p-4 shadow-sm">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-semibold">重置示範資料</div>
+            <p className="mt-0.5 text-[11px] text-zinc-500">
+              清空所有發票與獎號，只留一張保證中特別獎的 Envisage Telco 示範發票。
+            </p>
+          </div>
+          <button
+            onClick={async () => {
+              if (!confirm('將清空所有發票（含你掃過的），只保留一張示範發票。確定？')) return;
+              await resetToDemo();
+              alert('已重置 — 現在只有 Envisage Telco 一張示範發票');
+            }}
+            className="shrink-0 rounded-lg border border-zinc-200 px-3 py-1.5 text-xs font-medium text-zinc-700 hover:bg-zinc-50"
+          >
+            🔄 重置
+          </button>
         </div>
       </section>
     </div>
